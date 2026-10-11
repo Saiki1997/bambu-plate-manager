@@ -1,6 +1,6 @@
 {
   "name": "bambu-plate-manager",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "productName": "Bambu Plate Manager",
   "description": "Portable Windows app for Bambu Studio plate OCR, filament matching, and Excel export.",
