@@ -1,0 +1,60 @@
+{
+  "name": "bambu-plate-manager",
+  "version": "1.0.0",
+  "private": true,
+  "productName": "Bambu Plate Manager",
+  "description": "Portable Windows app for Bambu Studio plate OCR, filament matching, and Excel export.",
+  "author": "Saiki1997",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "build": "node ../node_modules/vite/bin/vite.js build --config vite.config.ts",
+    "dist:portable": "npm run build && electron-builder --win portable --x64"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.saiki1997.bambuplatemanager",
+    "productName": "Bambu Plate Manager",
+    "executableName": "Bambu-Plate-Manager",
+    "asar": false,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**",
+      "dist/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../attachments/Bambu_Lab_Filaments_Complete.xlsx",
+        "to": "database/Bambu_Lab_Filaments_Complete.xlsx"
+      },
+      {
+        "from": "../eng.traineddata",
+        "to": "tessdata/eng.traineddata"
+      },
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false,
+      "artifactName": "Bambu-Plate-Manager-Portable.exe"
+    },
+    "portable": {
+      "artifactName": "Bambu-Plate-Manager-Portable.exe"
+    }
+  }
+}

@@ -1,50 +1,49 @@
 # Bambu Plate Manager
 
-Portable Windows app for Bambu Studio screenshot OCR, filament matching, and Excel export.
+Portable Windows app for reading Bambu Studio slicing screenshots, matching filament colours against the supplied workbook, and exporting an Excel file.
 
-The filament catalogue is the supplied workbook `Bambu_Lab_Filaments_Complete.xlsx` (333 rows). It is not regenerated. Incomplete colour values in that file (`#FFF20`, `#F4E2A`, `#D4E3B`) are kept as written.
+The number beside a colour swatch is the **filament ID** in the Bambu Studio project, not an AMS slot. The ledger and the Excel export both label it Filament ID.
 
-## Portable use
+Download the finished portable build:
+
+[Bambu-Plate-Manager-Portable.exe](https://github.com/Saiki1997/bambu-plate-manager/releases/tag/v1.0.0)
+
+## Run from a folder or USB
+
+Keep this pair together:
 
 ```
 Bambu-Plate-Manager-Portable.exe
 BambuPlateManagerData/
 ```
 
-Double-click the exe. No installer, Node.js, or Python is required. On first launch the app creates `BambuPlateManagerData` beside the exe when that location is writable:
+Double-click the exe. It does not install, and it does not need Node.js or Python. On first launch it creates `BambuPlateManagerData` beside the exe when that folder is writable:
 
-- projects/
-- images/
-- database/
-- exports/
-- backups/
-- settings/
-- logs/
+- `projects/` current session
+- `images/` imported screenshots
+- `database/` the filament workbook
+- `exports/` workbooks saved from the app
+- `backups/` earlier session files
+- `settings/`
+- `logs/app.log`
 
-If the exe directory is not writable, the app asks for a folder. It does not choose another location silently. Replacing the exe does not delete `BambuPlateManagerData`.
+If the exe is in a folder that cannot be written, the app asks for another folder. It does not pick a different folder by itself.
+
+Replacing the exe with a newer copy does not delete `BambuPlateManagerData`. Do not delete that folder when updating.
+
+The catalogue file shipped with the app is `attachments/Bambu_Lab_Filaments_Complete.xlsx`. The app copies it into the portable data folder on first launch and does not overwrite that copy later.
+
+Unverified colours stay unverified until you choose a row from that workbook. A manual choice is kept when automatic matching runs again, and the export labels it Manually Confirmed.
 
 ## Build
 
-From the `desktop` directory, with Node.js 22:
+From this repository, with Node.js 22:
 
 ```
+npm install
+cd desktop
 npm install
 npm run dist:portable
 ```
 
-Output: `desktop/release/Bambu-Plate-Manager-Portable.exe`
-
-## Verification
-
-Checked on the build machine:
-
-- The output is a Windows PE file (MZ/PE) with a 7-Zip payload.
-- The payload includes `Bambu-Plate-Manager.exe`, both copies of the filament workbook, English OCR data, and the app.
-- Workbook parsing, CIEDE2000 matching, Excel swatch fills, duplicate merging, and portable-path logic tests passed.
-
-Not checked, because this build was not launched on Windows:
-
-- Double-click startup on Windows 10 or 11.
-- Creating the data folder on a real Windows disk.
-- Moving the folder to another drive or PC.
-- A read-only Windows directory. The read-only behaviour is covered by a logic test only.
+The exe is written to `desktop/release/Bambu-Plate-Manager-Portable.exe`.
