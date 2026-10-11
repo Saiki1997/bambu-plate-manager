@@ -1,25 +1,50 @@
 # Bambu Plate Manager
 
-Audit of this repository (commit history through the Electron stub): it is **not** a working Windows application.
+Portable Windows app for Bambu Studio screenshot OCR, filament matching, and Excel export.
 
-## What is actually in this repository
+The filament catalogue is the supplied workbook `Bambu_Lab_Filaments_Complete.xlsx` (333 rows). It is not regenerated. Incomplete colour values in that file (`#FFF20`, `#F4E2A`, `#D4E3B`) are kept as written.
 
-- `electron/` — a small browser window shell. It does not import screenshots, run OCR, match colours, or write Excel files.
-- `src/` — Python package stubs. The OCR engine is a placeholder. There is no filament catalogue file, no Excel exporter, and no application window.
-- `build_electron.bat` — does not produce `Bambu-Plate-Manager-Setup-1.0.0.exe`.
+## Portable use
 
-Do not treat `npm run build` inside `electron/` as a release. That script is not configured to bundle OCR, a colour database, or an installer that preserves user data.
+```
+Bambu-Plate-Manager-Portable.exe
+BambuPlateManagerData/
+```
 
-## What is not in this repository
+Double-click the exe. No installer, Node.js, or Python is required. On first launch the app creates `BambuPlateManagerData` beside the exe when that location is writable:
 
-- A tested Windows installer or portable executable
-- Offline Tesseract or PaddleOCR wired to Bambu Studio screenshots
-- The 318-colour Bambu Studio catalogue with CIEDE2000 matching
-- Excel workbooks with colour fills, frozen headers, and autofilter
-- SQLite project storage, backups, or last-session restore
+- projects/
+- images/
+- database/
+- exports/
+- backups/
+- settings/
+- logs/
 
-No installer path exists because none was built from this tree.
+If the exe directory is not writable, the app asks for a folder. It does not choose another location silently. Replacing the exe does not delete `BambuPlateManagerData`.
 
-## Next release, if packaging on Windows
+## Build
 
-A release build has to be made on a Windows machine (or a cross-compile setup with NSIS), from a complete Electron + React app, not from the current shell. Until that app exists in this repo, there is nothing to install.
+From the `desktop` directory, with Node.js 22:
+
+```
+npm install
+npm run dist:portable
+```
+
+Output: `desktop/release/Bambu-Plate-Manager-Portable.exe`
+
+## Verification
+
+Checked on the build machine:
+
+- The output is a Windows PE file (MZ/PE) with a 7-Zip payload.
+- The payload includes `Bambu-Plate-Manager.exe`, both copies of the filament workbook, English OCR data, and the app.
+- Workbook parsing, CIEDE2000 matching, Excel swatch fills, duplicate merging, and portable-path logic tests passed.
+
+Not checked, because this build was not launched on Windows:
+
+- Double-click startup on Windows 10 or 11.
+- Creating the data folder on a real Windows disk.
+- Moving the folder to another drive or PC.
+- A read-only Windows directory. The read-only behaviour is covered by a logic test only.
