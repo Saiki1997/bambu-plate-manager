@@ -1,0 +1,49 @@
+:root {
+  --bg: #1e1e1e;
+  --surface: #2d2d2d;
+  --fg: #e0e0e0;
+  --accent: #00ae42;
+  --border: #444;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: Segoe UI, system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+}
+.app {
+  display: flex;
+  height: 100vh;
+}
+.sidebar {
+  width: 220px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding: 16px;
+}
+.sidebar h1 {
+  margin: 0 0 24px;
+  font-size: 1.25rem;
+  color: var(--accent);
+}
+.nav-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  padding: 10px 12px;
+  margin-bottom: 4px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.nav-btn:hover, .nav-btn.active {
+  background: #3a3a3a;
+}
+.content {
+  flex: 1;
+  padding: 24px;
+  overflow: auto;
+}

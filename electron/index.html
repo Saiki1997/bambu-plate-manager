@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>BambuPlate Manager</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <h1>BambuPlate</h1>
+      <nav>
+        <button class="nav-btn active" data-page="dashboard">Dashboard</button>
+        <button class="nav-btn" data-page="import">Import Images</button>
+        <button class="nav-btn" data-page="catalogue">Filament Database</button>
+        <button class="nav-btn" data-page="excel">Excel Export</button>
+        <button class="nav-btn" data-page="history">History</button>
+        <button class="nav-btn" data-page="settings">Settings</button>
+      </nav>
+    </aside>
+    <main class="content" id="content">
+      <h2>Dashboard</h2>
+      <p>Electron shell is running.</p>
+      <p>Version: <span id="version">loading…</span></p>
+    </main>
+  </div>
+  <script src="renderer.js"></script>
+</body>
+</html>
