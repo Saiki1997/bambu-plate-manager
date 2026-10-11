@@ -1,35 +1,25 @@
-# BambuPlate OCR & Filament Manager
+# Bambu Plate Manager
 
-Desktop application for extracting 3D-printing filament information from Bambu Studio screenshots, matching against the Bambu Lab colour catalogue, and exporting to professional Excel workbooks.
+Audit of this repository (commit history through the Electron stub): it is **not** a working Windows application.
 
-**Recommended packaging: Electron** (avoids PyInstaller module issues).
+## What is actually in this repository
 
-## Quick Start (Electron)
+- `electron/` — a small browser window shell. It does not import screenshots, run OCR, match colours, or write Excel files.
+- `src/` — Python package stubs. The OCR engine is a placeholder. There is no filament catalogue file, no Excel exporter, and no application window.
+- `build_electron.bat` — does not produce `Bambu-Plate-Manager-Setup-1.0.0.exe`.
 
-```bat
-cd electron
-npm install
-npm start          # development
-npm run build      # Windows installer + portable exe
-```
+Do not treat `npm run build` inside `electron/` as a release. That script is not configured to bundle OCR, a colour database, or an installer that preserves user data.
 
-Or from the project root:
+## What is not in this repository
 
-```bat
-build_electron.bat
-```
+- A tested Windows installer or portable executable
+- Offline Tesseract or PaddleOCR wired to Bambu Studio screenshots
+- The 318-colour Bambu Studio catalogue with CIEDE2000 matching
+- Excel workbooks with colour fills, frozen headers, and autofilter
+- SQLite project storage, backups, or last-session restore
 
-## Python Backend (optional)
+No installer path exists because none was built from this tree.
 
-```bat
-pip install -r requirements.txt
-python main.py
-```
+## Next release, if packaging on Windows
 
-## Features
-
-- Project management with SQLite and session recovery
-- Filament catalogue (~80 Bambu Lab colours with HEX codes) + fuzzy matching
-- Excel export: standard multi-sheet, template-based, per-plate
-- Database backups, logging, and error handling
-- Electron packaging for reliable Windows builds
+A release build has to be made on a Windows machine (or a cross-compile setup with NSIS), from a complete Electron + React app, not from the current shell. Until that app exists in this repo, there is nothing to install.
