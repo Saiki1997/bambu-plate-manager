@@ -1,39 +1,55 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from "react";
 import {
   AlertTriangle,
+  ArrowDown,
   Download,
   ImagePlus,
+  Keyboard,
   Plus,
   Trash2,
   Undo2,
+  X,
 } from "lucide-react";
 import { previewPathPrefix } from "@/lib/preview-path-prefix";
 import { deleteImageBlob, getImageBlob, putImageBlob } from "@/lib/image-db";
 import { readScreenshot, type OcrProgress } from "@/lib/ocr-client";
-import type { Usage } from "@/lib/parse-slicing";
 import { downloadWorkbook, exportReport } from "@/lib/export-xlsx";
 import { createArchive, downloadBlob, readArchive, restoreArchiveImages } from "@/lib/archive";
 import {
   useProjectStore,
   type FilamentRow,
 } from "@/lib/project-store";
-import { cn, formatAmount, parseAmount } from "@/lib/utils";
-import { searchCatalogue, materials, brands, filterCatalogue, CATALOGUE_META, type CatalogueItem } from "@/lib/filament-match";
+import { cn } from "@/lib/utils";
+import { searchCatalogue, type CatalogueItem } from "@/lib/filament-match";
 import { ensureCatalogue } from "@/lib/filament-workbook";
 import { desktopApi, type DesktopInfo } from "@/lib/desktop";
 import { normalizeHex } from "@/lib/color-distance";
 import {
   automaticMatchPatch,
   clearMatchPatch,
-  filamentActions,
   isProtectedMatch,
   manualSelectionPatch,
-  matchStatusLabel,
-  possibleCatalogueMatches,
   suggestColour,
 } from "@/lib/manual-match";
+import { attentionCounts, nextAttentionRow, needsAttention, workflowSteps, type StepId } from "@/lib/workflow";
+import { UsageCell } from "./usage-cell";
+import { ColourField, shownHex } from "./colour-field";
+import { FilamentPicker } from "./filament-picker";
+import { CatalogueBrowser } from "./catalogue-browser";
+import { ExportDialog } from "./export-dialog";
+import { ShortcutsDialog, StepBar } from "./step-bar";
 
 type Filter = "all" | "review";
+type Notice = { text: string; tone: "info" | "error" };
+
+function errorText(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function isTyping(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName);
+}
 
 function asset(path: string): string {
   const prefix = previewPathPrefix(window.location.hostname, window.location.pathname) ?? "";
@@ -43,64 +59,6 @@ function asset(path: string): string {
 async function hashBlob(blob: Blob): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-1", await blob.arrayBuffer());
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function AmountField({
-  value,
-  label,
-  onCommit,
-}: {
-  value: number | null;
-  label: string;
-  onCommit: (next: number | null) => void;
-}) {
-  const [text, setText] = useState(formatAmount(value));
-  useEffect(() => setText(formatAmount(value)), [value]);
-  return (
-    <input
-      aria-label={label}
-      inputMode="decimal"
-      value={text}
-      onChange={(event) => setText(event.target.value)}
-      onBlur={() => {
-        const next = parseAmount(text);
-        if (next !== value) onCommit(next);
-      }}
-      className="w-full min-w-16 rounded-md border border-transparent bg-transparent px-1 py-1 text-right font-mono text-sm text-fg outline-none focus:border-border focus:bg-surface"
-    />
-  );
-}
-
-function UsageCell({
-  usage,
-  label,
-  onCommit,
-}: {
-  usage: Usage | null;
-  label: string;
-  onCommit: (next: Usage) => void;
-}) {
-  if (!usage) return <span className="text-muted">—</span>;
-  return (
-    <div className="space-y-0.5">
-      <div className="flex items-baseline justify-end gap-1">
-        <AmountField
-          value={usage.grams}
-          label={`${label} grams`}
-          onCommit={(grams) => onCommit({ ...usage, grams })}
-        />
-        <span className="text-xs text-muted">g</span>
-      </div>
-      <div className="flex items-baseline justify-end gap-1">
-        <AmountField
-          value={usage.meters}
-          label={`${label} metres`}
-          onCommit={(meters) => onCommit({ ...usage, meters })}
-        />
-        <span className="text-xs text-muted">m</span>
-      </div>
-    </div>
-  );
 }
 
 export function PlateApp() {
@@ -118,18 +76,19 @@ export function PlateApp() {
   const suggestAll = useProjectStore((state) => state.suggestAll);
   const mergeDuplicates = useProjectStore((state) => state.mergeDuplicates);
   const loadProject = useProjectStore((state) => state.loadProject);
+  const markExported = useProjectStore((state) => state.markExported);
 
   const [filter, setFilter] = useState<Filter>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [progress, setProgress] = useState<OcrProgress | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
   const [view, setView] = useState<"ledger" | "catalogue">("ledger");
   const [query, setQuery] = useState("");
   const [material, setMaterial] = useState("");
   const [busy, setBusy] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
-  const [ack, setAck] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [picking, setPicking] = useState(false);
   const [activeRowId, setActiveRowId] = useState<string | null>(null);
@@ -139,6 +98,15 @@ export function PlateApp() {
   const [catalogueTick, setCatalogueTick] = useState(0);
   const cancelRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const scrollToRow = useRef<string | null>(null);
+
+  function setStatus(text: string | null) {
+    setNotice(text ? { text, tone: "info" } : null);
+  }
+
+  function fail(error: unknown, fallback: string) {
+    setNotice({ text: errorText(error, fallback), tone: "error" });
+  }
 
   const selected = project.images.find((image) => image.id === selectedId) ?? project.images.at(-1) ?? null;
 
@@ -165,14 +133,42 @@ export function PlateApp() {
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
-        event.preventDefault();
-        undo();
+      const dialogOpen = exportOpen || pickerRowId !== null || shortcutsOpen;
+      const key = event.key.toLowerCase();
+      if (event.metaKey || event.ctrlKey) {
+        if (key === "z" && !isTyping(event.target)) {
+          event.preventDefault();
+          undo();
+        } else if (dialogOpen) {
+          return;
+        } else if (key === "o" && !busy) {
+          event.preventDefault();
+          inputRef.current?.click();
+        } else if (key === "m" && project.rows.length > 0) {
+          event.preventDefault();
+          matchColours();
+        } else if (key === "e" && project.rows.length > 0) {
+          event.preventDefault();
+          setExportOpen(true);
+        }
+        return;
       }
+      if (event.altKey || isTyping(event.target)) return;
+      if (event.key === "Escape" && shortcutsOpen) setShortcutsOpen(false);
+      if (dialogOpen) return;
+      if (event.key === "?") setShortcutsOpen(true);
+      else if (key === "n") jumpToNext();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo]);
+  });
+
+  useEffect(() => {
+    const id = scrollToRow.current;
+    if (!id) return;
+    scrollToRow.current = null;
+    document.getElementById(`row-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  });
 
   useEffect(() => {
     void ensureCatalogue()
@@ -180,7 +176,7 @@ export function PlateApp() {
         setCatalogueTick((value) => value + 1);
         useProjectStore.getState().reviewLocks();
       })
-      .catch((error: unknown) => setStatus(error instanceof Error ? error.message : "The filament workbook could not be loaded."));
+      .catch((error: unknown) => fail(error, "The filament workbook could not be loaded."));
   }, []);
 
   useEffect(() => {
@@ -249,6 +245,32 @@ export function PlateApp() {
 
   const reviewCount = project.rows.filter((row) => row.needsReview).length;
   const filamentCount = project.rows.filter((row) => !row.isTotal).length;
+  const steps = useMemo(() => workflowSteps(project), [project]);
+  const attention = useMemo(() => attentionCounts(project), [project]);
+
+  function jumpToNext() {
+    const row = nextAttentionRow(project.rows, activeRowId);
+    if (!row) {
+      setStatus("Nothing left to check. Every included line is read and its colour confirmed.");
+      return;
+    }
+    setView("ledger");
+    setFilter("all");
+    setSelectedId(row.imageId);
+    setActiveRowId(row.id);
+    scrollToRow.current = row.id;
+  }
+
+  function goToStep(id: StepId) {
+    if (id === "import") {
+      if (!busy) inputRef.current?.click();
+    } else if (id === "review" || id === "match") {
+      if (attention.total > 0) jumpToNext();
+      else setView("ledger");
+    } else if (project.rows.length > 0) {
+      setExportOpen(true);
+    }
+  }
 
   async function consume(files: File[]) {
     const images = files.filter((file) => file.type.startsWith("image/") || /\.(png|jpe?g|webp|bmp|tiff?)$/i.test(file.name));
@@ -287,7 +309,7 @@ export function PlateApp() {
         setStatus(message);
       }
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "The screenshot could not be read.");
+      fail(error, "The screenshot could not be read.");
     } finally {
       setBusy(false);
       setProgress(null);
@@ -319,7 +341,6 @@ export function PlateApp() {
 
   const report = useMemo(() => exportReport(project), [project]);
   const activeRow = project.rows.find((row) => row.id === activeRowId && !row.isTotal) ?? null;
-  const hasExportIssues = report.unmatched > 0 || report.lowOcr > 0 || report.uncertainMatch > 0 || report.missingColour > 0;
 
   const catalogueHits = useMemo(
     () => (view === "catalogue" ? searchCatalogue(query, material || null, 48) : []),
@@ -544,6 +565,7 @@ export function PlateApp() {
             type="button"
             onClick={matchColours}
             disabled={project.rows.length === 0}
+            title="Ctrl+M"
             className="inline-flex min-h-11 items-center gap-2 rounded-md border border-border px-3 text-sm disabled:opacity-40"
           >
             Match colours
@@ -559,6 +581,7 @@ export function PlateApp() {
             type="button"
             onClick={undo}
             disabled={past.length === 0}
+            title="Ctrl+Z"
             className="inline-flex min-h-11 items-center gap-2 rounded-md border border-border px-3 text-sm text-fg disabled:opacity-40"
           >
             <Undo2 className="size-4" />
@@ -566,18 +589,26 @@ export function PlateApp() {
           </button>
           <button
             type="button"
-            onClick={() => {
-              setAck(false);
-              setExportOpen(true);
-            }}
+            onClick={() => setExportOpen(true)}
+            title="Ctrl+E"
             disabled={project.rows.length === 0}
             className="inline-flex min-h-11 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-fg disabled:opacity-40"
           >
             <Download className="size-4" />
             Export workbook
           </button>
+          <button
+            type="button"
+            onClick={() => setShortcutsOpen(true)}
+            aria-label="Keyboard shortcuts"
+            title="Keyboard shortcuts (?)"
+            className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md border border-border text-muted"
+          >
+            <Keyboard className="size-4" />
+          </button>
         </div>
       </header>
+      <StepBar steps={steps} onStep={goToStep} />
       {desktopInfo && (
         <div className={desktopInfo.askedUser ? "border-b border-primary/50 bg-surface" : "border-b border-border"}>
           <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-2 px-4 py-2 text-sm">
@@ -599,6 +630,7 @@ export function PlateApp() {
                 type="button"
                 onClick={() => inputRef.current?.click()}
                 disabled={busy}
+                title="Ctrl+O"
                 className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-fg disabled:opacity-40"
               >
                 <ImagePlus className="size-4" />
@@ -606,7 +638,7 @@ export function PlateApp() {
               </button>
               <button
                 type="button"
-                onClick={() => void loadSamples().catch((error: unknown) => setStatus(error instanceof Error ? error.message : "Samples failed."))}
+                onClick={() => void loadSamples().catch((error: unknown) => fail(error, "Samples failed."))}
                 disabled={busy}
                 className="inline-flex min-h-11 items-center justify-center rounded-md border border-border px-3 text-sm disabled:opacity-40"
               >
@@ -614,7 +646,7 @@ export function PlateApp() {
               </button>
               <button
                 type="button"
-                onClick={() => void saveArchive().catch((error: unknown) => setStatus(error instanceof Error ? error.message : "Archive failed."))}
+                onClick={() => void saveArchive().catch((error: unknown) => fail(error, "Archive failed."))}
                 disabled={project.images.length === 0 && project.rows.length === 0}
                 className="inline-flex min-h-11 items-center justify-center rounded-md border border-border px-3 text-sm disabled:opacity-40"
               >
@@ -630,7 +662,7 @@ export function PlateApp() {
                     const file = event.target.files?.[0];
                     event.target.value = "";
                     if (!file) return;
-                    void openArchive(file).catch((error: unknown) => setStatus(error instanceof Error ? error.message : "Restore failed."));
+                    void openArchive(file).catch((error: unknown) => fail(error, "Restore failed."));
                   }}
                 />
               </label>
@@ -772,7 +804,21 @@ export function PlateApp() {
         </aside>
 
         <main className="min-w-0 space-y-4">
-          {status && <p className="text-sm text-muted">{status}</p>}
+          {notice && (
+            <div
+              role={notice.tone === "error" ? "alert" : "status"}
+              className={cn(
+                "flex items-start gap-2 rounded-md border px-3 py-2 text-sm",
+                notice.tone === "error" ? "border-red-400/60 bg-red-400/10" : "border-border bg-surface",
+              )}
+            >
+              {notice.tone === "error" && <AlertTriangle className="mt-0.5 size-4 shrink-0 text-red-300" />}
+              <p className="min-w-0 flex-1">{notice.text}</p>
+              <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss message" className="-my-2 -mr-2 inline-flex min-h-11 min-w-11 items-center justify-center text-muted">
+                <X className="size-4" />
+              </button>
+            </div>
+          )}
           {view === "catalogue" ? (
             <CatalogueBrowser
               query={query}
@@ -805,6 +851,18 @@ export function PlateApp() {
                 </p>
               )}
             </div>
+            <div className="flex flex-wrap items-center gap-2">
+            {attention.total > 0 && (
+              <button
+                type="button"
+                onClick={jumpToNext}
+                title="N"
+                className="inline-flex min-h-11 items-center gap-2 rounded-md border border-primary px-3 text-sm text-primary"
+              >
+                <ArrowDown className="size-4" />
+                Next to check ({attention.total})
+              </button>
+            )}
             <div className="flex rounded-md border border-border p-1">
               {(["all", "review"] as const).map((value) => (
                 <button
@@ -819,6 +877,7 @@ export function PlateApp() {
                   {value === "all" ? "All lines" : "Needs review"}
                 </button>
               ))}
+            </div>
             </div>
           </section>
 
@@ -898,9 +957,37 @@ export function PlateApp() {
           {project.images.length === 0 && !busy && (
             <div className="rounded-md border border-border bg-surface px-4 py-8">
               <h2 className="text-base font-medium">Read a slicing result</h2>
-              <p className="mt-2 max-w-xl text-sm leading-relaxed text-muted">
-                Import a Bambu Studio plate screenshot. The table keeps only what OCR can read. A colour stays unverified unless one database colour is uniquely high-confidence. Choose the filament yourself when it is not. Manual choices are kept when matching runs again.
-              </p>
+              <ol className="mt-3 max-w-xl list-decimal space-y-2 pl-5 text-sm leading-relaxed text-muted">
+                <li>
+                  <span className="text-fg">Import</span> a Bambu Studio slicing screenshot. Drop it here, paste it with Ctrl+V, or press Ctrl+O.
+                </li>
+                <li>
+                  <span className="text-fg">Review</span> the lines OCR was unsure about. Press N to jump to the next one.
+                </li>
+                <li>
+                  <span className="text-fg">Match</span> each colour to a filament. A colour stays unverified until one database colour is a clear match or you choose it yourself.
+                </li>
+                <li>
+                  <span className="text-fg">Export</span> the Excel workbook.
+                </li>
+              </ol>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => inputRef.current?.click()}
+                  className="inline-flex min-h-11 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-fg"
+                >
+                  <ImagePlus className="size-4" />
+                  Add screenshots
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void loadSamples().catch((error: unknown) => fail(error, "Samples failed."))}
+                  className="inline-flex min-h-11 items-center rounded-md border border-border px-3 text-sm"
+                >
+                  Try the samples
+                </button>
+              </div>
             </div>
           )}
 
@@ -944,12 +1031,13 @@ export function PlateApp() {
                   {visibleRows.map((row) => (
                     <tr
                       key={row.id}
+                      id={`row-${row.id}`}
                       onClick={() => {
                         if (!row.isTotal) setActiveRowId(row.id);
                       }}
                       className={cn(
                         "border-t border-border",
-                        row.needsReview && "bg-primary/5",
+                        needsAttention(row) && "bg-primary/5",
                         row.isTotal && "bg-surface",
                         activeRowId === row.id && "outline outline-1 outline-primary",
                       )}
@@ -1078,49 +1166,25 @@ export function PlateApp() {
         </main>
       </div>
       {exportOpen && (
-        <div className="fixed inset-0 z-20 flex items-end justify-center bg-bg/80 p-4 sm:items-center">
-          <div role="dialog" aria-labelledby="export-title" className="w-full max-w-lg rounded-md border border-border bg-surface p-4">
-            <h2 id="export-title" className="text-base font-medium">Export workbook</h2>
-            <p className="mt-1 text-sm text-muted">
-              {report.rows} filament {report.rows === 1 ? "row" : "rows"} across {report.plates} {report.plates === 1 ? "plate" : "plates"}.
-              {report.totalGrams === null ? " Total grams unavailable." : ` About ${report.totalGrams.toFixed(2)} g where a weight was read.`}
-            </p>
-            <ul className="mt-3 space-y-1 text-sm">
-              <li>{report.unmatched} without a confirmed catalogue match</li>
-              <li>{report.lowOcr} with low-confidence or incomplete OCR</li>
-              <li>{report.uncertainMatch} unverified colours or unlocked suggestions</li>
-              <li>{report.missingColour} missing both a sample and a catalogue colour</li>
-            </ul>
-            <p className="mt-3 text-sm text-muted">
-              The file has Project Summary, Filament Details, Colour Summary, and Plates. Swatches are cell fills. Empty weights stay empty.
-            </p>
-            {hasExportIssues && (
-              <label className="mt-3 flex items-start gap-2 text-sm">
-                <input type="checkbox" checked={ack} onChange={(event) => setAck(event.target.checked)} className="mt-1 size-4 accent-primary" />
-                I have reviewed the uncertain rows and still want this workbook.
-              </label>
-            )}
-            <div className="mt-4 flex justify-end gap-2">
-              <button type="button" onClick={() => setExportOpen(false)} className="min-h-11 rounded-md border border-border px-3 text-sm">
-                Back
-              </button>
-              <button
-                type="button"
-                disabled={hasExportIssues && !ack}
-                onClick={() => {
-                  setExportOpen(false);
-                  void downloadWorkbook(project)
-                    .then(() => setStatus("Workbook downloaded."))
-                    .catch((error: unknown) => setStatus(error instanceof Error ? error.message : "Excel export failed."));
-                }}
-                className="min-h-11 rounded-md bg-primary px-3 text-sm font-medium text-primary-fg disabled:opacity-40"
-              >
-                Download workbook
-              </button>
-            </div>
-          </div>
-        </div>
+        <ExportDialog
+          report={report}
+          onCancel={() => setExportOpen(false)}
+          onReview={() => {
+            setExportOpen(false);
+            jumpToNext();
+          }}
+          onExport={() => {
+            setExportOpen(false);
+            void downloadWorkbook(project)
+              .then(() => {
+                markExported();
+                setStatus(desktopApi() ? "Workbook saved to the exports folder and downloaded." : "Workbook downloaded.");
+              })
+              .catch((error: unknown) => fail(error, "Excel export failed."));
+          }}
+        />
       )}
+      {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
       {pickerRowId && (
         <FilamentPicker
           row={project.rows.find((row) => row.id === pickerRowId) ?? null}
@@ -1139,379 +1203,5 @@ export function PlateApp() {
         />
       )}
     </div>
-  );
-}
-
-function shownHex(row: FilamentRow): string | null {
-  if ((row.matchStatus === "manual" || row.matchStatus === "accepted" || row.matchStatus === "suggested") && row.catalogueHex) {
-    return row.catalogueHex;
-  }
-  return row.hex;
-}
-
-function ColourField({
-  row,
-  onCommit,
-  onAccept,
-  onClear,
-  onChoose,
-  onRematch,
-}: {
-  row: FilamentRow;
-  onCommit: (hex: string | null) => void;
-  onAccept: () => void;
-  onClear: () => void;
-  onChoose: () => void;
-  onRematch: () => void;
-}) {
-  const [text, setText] = useState(row.hex ?? "");
-  useEffect(() => setText(row.hex ?? ""), [row.hex]);
-  const actions = filamentActions(row);
-  const swatch = shownHex(row);
-  const status = matchStatusLabel(row.matchStatus);
-  const ocr = normalizeHex(row.ocrHex ?? row.hex);
-  const selectedHex = normalizeHex(row.catalogueHex);
-  return (
-    <div>
-      <div className="flex items-center gap-2">
-        <span className="size-5 shrink-0 rounded-sm border border-border" style={{ background: swatch ?? "transparent" }} />
-        <span className="font-mono text-xs">{swatch ?? "Unverified"}</span>
-        {status && <span className="text-xs text-muted">{status}</span>}
-      </div>
-      {row.catalogueName && (
-        <p className="mt-1 text-xs text-muted">
-          {row.catalogueName}
-          {row.catalogueMaterial ? ` · ${row.catalogueMaterial}` : ""}
-          {row.catalogueCode ? ` · ${row.catalogueCode}` : ""}
-          {row.catalogueBrand ? ` · ${row.catalogueBrand}` : ""}
-        </p>
-      )}
-      {ocr && selectedHex && ocr !== selectedHex && <p className="font-mono text-xs text-muted">OCR {ocr}</p>}
-      {row.catalogueMissing && (
-        <p className="text-xs text-primary">This saved record is not in the current database. The selection was kept.</p>
-      )}
-      {row.catalogueChanged && (
-        <p className="text-xs text-primary">This database record changed. The saved selection was kept.</p>
-      )}
-      <label className="mt-1 flex items-center gap-2 text-xs text-muted">
-        OCR
-        <input
-          aria-label="Original OCR hex"
-          value={text}
-          placeholder="Unverified"
-          onChange={(event) => setText(event.target.value)}
-          onBlur={() => {
-            const next = text.trim();
-            if (!next) onCommit(null);
-            else if (/^#[0-9a-fA-F]{6}$/.test(next)) onCommit(next.toLowerCase());
-            else setText(row.hex ?? "");
-          }}
-          className="w-24 bg-transparent font-mono text-xs text-fg outline-none"
-        />
-      </label>
-      {!row.isTotal && (
-        <div className="mt-1 flex flex-wrap gap-1">
-          {actions.choose && (
-            <button type="button" onClick={onChoose} className="min-h-11 rounded-md border border-primary px-2 text-xs text-primary">
-              Choose from Filament Database
-            </button>
-          )}
-          {actions.change && (
-            <button type="button" onClick={onChoose} className="min-h-11 rounded-md border border-border px-2 text-xs">
-              Change selected filament
-            </button>
-          )}
-          {actions.confirmSuggestion && (
-            <button type="button" onClick={onAccept} className="min-h-11 rounded-md border border-border px-2 text-xs text-primary">
-              Lock suggestion
-            </button>
-          )}
-          {actions.clear && (
-            <button type="button" onClick={onClear} className="min-h-11 rounded-md border border-border px-2 text-xs text-muted">
-              Clear
-            </button>
-          )}
-          {actions.rematch && (
-            <button type="button" onClick={onRematch} className="min-h-11 rounded-md border border-border px-2 text-xs text-muted">
-              Re-run automatic matching
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function itemKey(item: CatalogueItem, index: number): string {
-  return `${item.family}|${item.code}|${item.material}|${item.name}|${item.rawHex ?? ""}|${index}`;
-}
-
-function FilamentPicker({
-  row,
-  catalogueTick,
-  onCancel,
-  onConfirm,
-}: {
-  row: FilamentRow | null;
-  catalogueTick: number;
-  onCancel: () => void;
-  onConfirm: (item: CatalogueItem) => void;
-}) {
-  const [query, setQuery] = useState("");
-  const [material, setMaterial] = useState("");
-  const [brand, setBrand] = useState("");
-  const [pendingKey, setPendingKey] = useState<string | null>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
-  const possibles = useMemo(() => (row ? possibleCatalogueMatches(row.ocrHex ?? row.hex) : []), [row, catalogueTick]);
-  const filtered = useMemo(
-    () => filterCatalogue({ query, material: material || null, brand: brand || null, limit: 80 }),
-    [query, material, brand, catalogueTick],
-  );
-  const pending = useMemo(() => {
-    if (!pendingKey) return null;
-    return [...possibles, ...filtered.items].find((item, index) => itemKey(item, index) === pendingKey) ?? null;
-  }, [pendingKey, possibles, filtered.items]);
-
-  useEffect(() => {
-    searchRef.current?.focus();
-  }, []);
-
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") onCancel();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onCancel]);
-
-  if (!row) return null;
-  const ocr = normalizeHex(row.ocrHex ?? row.hex);
-  const brandNames = brands();
-
-  return (
-    <div className="fixed inset-0 z-30 flex items-end justify-center bg-bg/80 p-4 sm:items-center">
-      <div role="dialog" aria-modal="true" aria-labelledby="filament-picker-title" className="flex max-h-[85vh] w-full max-w-3xl flex-col rounded-md border border-border bg-surface">
-        <div className="border-b border-border px-4 py-3">
-          <h2 id="filament-picker-title" className="text-base font-medium">Choose from Filament Database</h2>
-          <p className="mt-1 text-sm text-muted">
-            {CATALOGUE_META.count} records from the supplied workbook. Nothing is assigned until you confirm.
-            {ocr ? ` Original OCR colour ${ocr}.` : " No OCR colour was read."}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2 px-4 py-3">
-          <input
-            ref={searchRef}
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search name, colour, material, code, or hex"
-            aria-label="Search filament database"
-            className="min-h-11 min-w-48 flex-1 rounded-md border border-border bg-bg px-3 text-sm outline-none focus:border-primary"
-          />
-          <select
-            aria-label="Filter by material type"
-            value={material}
-            onChange={(event) => setMaterial(event.target.value)}
-            className="min-h-11 rounded-md border border-border bg-bg px-3 text-sm"
-          >
-            <option value="">All materials</option>
-            {materials().map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-          {brandNames.length > 0 && (
-            <select
-              aria-label="Filter by brand"
-              value={brand}
-              onChange={(event) => setBrand(event.target.value)}
-              className="min-h-11 rounded-md border border-border bg-bg px-3 text-sm"
-            >
-              <option value="">All brands</option>
-              {brandNames.map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-3">
-          {possibles.length > 0 && (
-            <section>
-              <h3 className="text-sm font-medium">Possible matches</h3>
-              <p className="mt-1 text-xs text-muted">Separate database rows. The closest colour is not selected for you.</p>
-              <ul className="mt-2 space-y-2">
-                {possibles.map((item, index) => (
-                  <FilamentChoice
-                    key={itemKey(item, index)}
-                    item={item}
-                    pressed={pendingKey === itemKey(item, index)}
-                    onSelect={() => setPendingKey(itemKey(item, index))}
-                  />
-                ))}
-              </ul>
-            </section>
-          )}
-          <section>
-            <h3 className="text-sm font-medium">Database</h3>
-            <p className="mt-1 text-xs text-muted">
-              Showing {filtered.items.length} of {filtered.total} from the supplied workbook.
-            </p>
-            {filtered.items.length === 0 ? (
-              <p className="mt-2 text-sm text-muted">No filaments in the supplied database match that search.</p>
-            ) : (
-              <ul className="mt-2 space-y-2">
-                {filtered.items.map((item, index) => (
-                  <FilamentChoice
-                    key={itemKey(item, index + possibles.length)}
-                    item={item}
-                    pressed={pendingKey === itemKey(item, index + possibles.length)}
-                    onSelect={() => setPendingKey(itemKey(item, index + possibles.length))}
-                  />
-                ))}
-              </ul>
-            )}
-          </section>
-        </div>
-        <div className="border-t border-border px-4 py-3">
-          {pending ? (
-            <div className="mb-3 flex items-center gap-3">
-              <span className="size-10 shrink-0 rounded-md border border-border" style={{ background: pending.hexes[0] ?? "transparent" }} />
-              {ocr && (
-                <span className="size-10 shrink-0 rounded-md border border-border" style={{ background: ocr }} title={`OCR ${ocr}`} />
-              )}
-              <div className="min-w-0 text-sm">
-                <p className="truncate font-medium">{pending.brand || "Unknown brand"} · {pending.name}</p>
-                <p className="truncate text-xs text-muted">
-                  {pending.material || "No material"} · {pending.code || "no code"} · {pending.hexes[0] ?? pending.rawHex ?? "no colour"} · id {pending.family || "none"}
-                </p>
-              </div>
-            </div>
-          ) : (
-            <p className="mb-3 text-sm text-muted">Select a record to preview it. Cancel leaves this filament line unchanged.</p>
-          )}
-          <div className="flex justify-end gap-2">
-            <button type="button" onClick={onCancel} className="min-h-11 rounded-md border border-border px-3 text-sm">
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={!pending}
-              onClick={() => pending && onConfirm(pending)}
-              className="min-h-11 rounded-md bg-primary px-3 text-sm font-medium text-primary-fg disabled:opacity-40"
-            >
-              Confirm selection
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function FilamentChoice({
-  item,
-  pressed,
-  onSelect,
-}: {
-  item: CatalogueItem;
-  pressed: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <li>
-      <button
-        type="button"
-        aria-pressed={pressed}
-        onClick={onSelect}
-        className={cn(
-          "flex w-full items-center gap-3 rounded-md border p-2 text-left",
-          pressed ? "border-primary bg-bg" : "border-border bg-bg",
-        )}
-      >
-        <span className="size-8 shrink-0 rounded-md border border-border" style={{ background: item.hexes[0] ?? "transparent" }} />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm">
-            {item.brand || "Unknown brand"} · {item.name}
-          </span>
-          <span className="block truncate font-mono text-xs text-muted">
-            {item.material || "No material"} · {item.kind || "no type"} · {item.code || "no code"} · {item.hexes[0] ?? item.rawHex ?? "no colour"} · id {item.family || "none"}
-          </span>
-        </span>
-      </button>
-    </li>
-  );
-}
-
-function CatalogueBrowser({
-  query,
-  material,
-  hits,
-  activeRow,
-  onQuery,
-  onMaterial,
-  onUse,
-}: {
-  query: string;
-  material: string;
-  hits: CatalogueItem[];
-  activeRow: FilamentRow | null;
-  onQuery: (value: string) => void;
-  onMaterial: (value: string) => void;
-  onUse: (item: CatalogueItem) => void;
-}) {
-  return (
-    <section className="space-y-3">
-      <div>
-        <h2 className="text-base font-medium">Bambu Lab filament colours</h2>
-        <p className="mt-1 max-w-2xl text-sm text-muted">
-          {CATALOGUE_META.count} colours from the supplied Bambu Lab workbook. Product codes such as 10501 are not hexadecimal colours.
-          {CATALOGUE_META.incomplete > 0
-            ? ` ${CATALOGUE_META.incomplete} colour codes in that workbook are incomplete and are left unchanged.`
-            : ""}
-          {activeRow ? " Choosing a colour manually confirms it and keeps the OCR colour." : " Select a ledger line before choosing a colour."}
-        </p>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        <input
-          value={query}
-          onChange={(event) => onQuery(event.target.value)}
-          placeholder="Search name or code"
-          aria-label="Search filament catalogue"
-          className="min-h-11 min-w-48 flex-1 rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-primary"
-        />
-        <select
-          aria-label="Filter by material"
-          value={material}
-          onChange={(event) => onMaterial(event.target.value)}
-          className="min-h-11 rounded-md border border-border bg-surface px-3 text-sm"
-        >
-          <option value="">All materials</option>
-          {materials().map((name) => (
-            <option key={name} value={name}>
-              {name}
-            </option>
-          ))}
-        </select>
-      </div>
-      <ul className="grid gap-2 sm:grid-cols-2">
-        {hits.map((item, index) => (
-          <li key={`${item.family}-${item.code}-${item.material}-${index}`} className="flex items-center gap-3 rounded-md border border-border bg-surface p-2">
-            <span className="size-8 shrink-0 rounded-md border border-border" style={{ background: item.hexes[0] ?? "transparent" }} />
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm">{item.name}</span>
-              <span className="block truncate font-mono text-xs text-muted">
-                {item.material} · {item.code || "no code"} · {item.hexes[0] ?? item.rawHex ?? "no colour"}
-              </span>
-            </span>
-            <button type="button" onClick={() => onUse(item)} className="min-h-11 shrink-0 rounded-md border border-border px-2 text-xs">
-              Use
-            </button>
-          </li>
-        ))}
-      </ul>
-      {hits.length === 0 && <p className="text-sm text-muted">No catalogue colours match that search.</p>}
-    </section>
   );
 }
