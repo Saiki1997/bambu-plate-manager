@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildWorkbook, exportReport } from "./export-xlsx.ts";
 import type { FilamentRow, Project } from "./project-store.ts";
+import { filamentKey } from "./filament-totals.ts";
 
 function row(patch: Partial<FilamentRow>): FilamentRow {
   return {
@@ -93,7 +94,7 @@ test("workbook keeps product codes as text and paints a colour swatch", async ()
   await book.xlsx.load(await blob.arrayBuffer());
   assert.deepEqual(
     book.worksheets.map((sheet) => sheet.name),
-    ["Project Summary", "Filament Details", "Colour Summary", "Plates"],
+    ["Project Summary", "Filament Details", "Colour Summary", "Filament Totals", "Plates"],
   );
 
   const details = book.getWorksheet("Filament Details");
@@ -124,4 +125,28 @@ test("workbook keeps product codes as text and paints a colour swatch", async ()
     assert.equal(colourSwatch.fill.fgColor?.argb, "FF00AE42");
   }
   assert.equal(colours.getRow(2).getCell(2).value, "Bambu Lab");
+});
+
+test("filament totals sheet carries cost and spool shortfall, and leaves unknown cost empty", async () => {
+  const green = row({});
+  const key = filamentKey(green)!;
+  const blob = await buildWorkbook(
+    project([green, row({ id: "row-2", hex: "#123456", catalogueName: null, catalogueCode: null, catalogueHex: null, total: { meters: 1, grams: 10 } })]),
+    { prices: { currency: "RM", defaultPerKg: null, perKg: { [key]: 100 } }, stock: { grams: { [key]: 150 } } },
+  );
+  const { default: ExcelJS } = await import("exceljs");
+  const book = new ExcelJS.Workbook();
+  await book.xlsx.load(await blob.arrayBuffer());
+  const sheet = book.getWorksheet("Filament Totals");
+  assert.ok(sheet);
+  assert.equal(sheet.getRow(1).getCell(11).value, "Cost, RM");
+  const first = sheet.getRow(2);
+  assert.equal(first.getCell(3).value, "Bambu Green");
+  assert.equal(first.getCell(8).value, 200.7);
+  assert.equal(first.getCell(11).value, 20.07);
+  assert.equal(first.getCell(13).value, 50.7);
+  assert.equal(sheet.getRow(3).getCell(11).value, null);
+  const summary = book.getWorksheet("Project Summary");
+  const costRow = summary?.getRows(1, 20)?.find((r) => r.getCell(1).value === "Estimated filament cost, RM");
+  assert.equal(costRow?.getCell(2).value, 20.07);
 });

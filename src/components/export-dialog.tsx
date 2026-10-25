@@ -53,7 +53,7 @@ export function ExportDialog({
           <p className="mt-3 text-sm">Every line is read and every colour is confirmed.</p>
         )}
         <p className="mt-3 text-sm text-muted">
-          The file has Project Summary, Filament Details, Colour Summary, and Plates. Swatches are cell fills. Empty weights stay empty.
+          The file has Project Summary, Filament Details, Colour Summary, Filament Totals with cost and stock, and Plates. Swatches are cell fills. Empty weights stay empty.
         </p>
         {hasIssues && (
           <label className="mt-3 flex items-start gap-2 text-sm">

@@ -39,6 +39,17 @@ import { FilamentPicker } from "./filament-picker";
 import { CatalogueBrowser } from "./catalogue-browser";
 import { ExportDialog } from "./export-dialog";
 import { ShortcutsDialog, StepBar } from "./step-bar";
+import { TotalsView } from "./totals-view";
+import {
+  deductFromStock,
+  emptyPrices,
+  emptyStock,
+  filamentTotals,
+  parsePrices,
+  parseStock,
+  type PriceBook,
+  type StockBook,
+} from "@/lib/filament-totals";
 
 type Filter = "all" | "review";
 type Notice = { text: string; tone: "info" | "error" };
@@ -85,7 +96,9 @@ export function PlateApp() {
   const [progress, setProgress] = useState<OcrProgress | null>(null);
   const [batch, setBatch] = useState<{ index: number; count: number; name: string } | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [view, setView] = useState<"ledger" | "catalogue">("ledger");
+  const [view, setView] = useState<"ledger" | "catalogue" | "totals">("ledger");
+  const [prices, setPrices] = useState<PriceBook>(emptyPrices);
+  const [stock, setStock] = useState<StockBook>(emptyStock);
   const [query, setQuery] = useState("");
   const [material, setMaterial] = useState("");
   const [busy, setBusy] = useState(false);
@@ -106,7 +119,19 @@ export function PlateApp() {
 
   useEffect(() => {
     void loadSetting("colour-memory").then((value) => setColourMemory(parseMemory(value)));
+    void loadSetting("filament-prices").then((value) => setPrices(parsePrices(value)));
+    void loadSetting("spool-stock").then((value) => setStock(parseStock(value)));
   }, []);
+
+  function updatePrices(next: PriceBook) {
+    setPrices(next);
+    void saveSetting("filament-prices", next).catch((error: unknown) => fail(error, "Prices could not be saved."));
+  }
+
+  function updateStock(next: StockBook) {
+    setStock(next);
+    void saveSetting("spool-stock", next).catch((error: unknown) => fail(error, "Spool stock could not be saved."));
+  }
 
   function updateMemory(next: ReturnType<typeof colourMemory>) {
     if (next === colourMemory()) return;
@@ -389,6 +414,7 @@ export function PlateApp() {
   }
 
   const report = useMemo(() => exportReport(project), [project]);
+  const totals = useMemo(() => filamentTotals(project, prices, stock), [project, prices, stock]);
   const activeRow = project.rows.find((row) => row.id === activeRowId && !row.isTotal) ?? null;
 
   const catalogueHits = useMemo(
@@ -626,6 +652,16 @@ export function PlateApp() {
             className="inline-flex min-h-11 items-center gap-2 rounded-md border border-border px-3 text-sm"
           >
             {view === "catalogue" ? "Back to ledger" : "Filament database"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setView(view === "totals" ? "ledger" : "totals")}
+            className={cn(
+              "inline-flex min-h-11 items-center gap-2 rounded-md border px-3 text-sm",
+              view === "totals" ? "border-primary text-primary" : "border-border",
+            )}
+          >
+            {view === "totals" ? "Back to ledger" : "Totals & cost"}
           </button>
           <button
             type="button"
@@ -869,7 +905,23 @@ export function PlateApp() {
               </button>
             </div>
           )}
-          {view === "catalogue" ? (
+          {view === "totals" ? (
+            <TotalsView
+              totals={totals}
+              prices={prices}
+              onPrices={updatePrices}
+              onStock={(key, grams) => {
+                const next = { ...stock.grams };
+                if (grams === null) delete next[key];
+                else next[key] = grams;
+                updateStock({ grams: next });
+              }}
+              onDeduct={() => {
+                updateStock(deductFromStock(stock, totals));
+                setStatus("Subtracted this project's grams from the spool stock.");
+              }}
+            />
+          ) : view === "catalogue" ? (
             <CatalogueBrowser
               memory={memory}
               onForget={(hex) => updateMemory(forgetPick(colourMemory(), hex))}
@@ -1236,7 +1288,7 @@ export function PlateApp() {
           }}
           onExport={() => {
             setExportOpen(false);
-            void downloadWorkbook(project)
+            void downloadWorkbook(project, { prices, stock })
               .then(() => {
                 markExported();
                 setStatus(desktopApi() ? "Workbook saved to the exports folder and downloaded." : "Workbook downloaded.");

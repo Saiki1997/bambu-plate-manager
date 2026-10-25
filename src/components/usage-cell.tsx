@@ -1,15 +1,20 @@
 import { useEffect, useState } from "react";
 import type { Usage } from "@/lib/parse-slicing";
-import { formatAmount, parseAmount } from "@/lib/utils";
+import { cn, formatAmount, parseAmount } from "@/lib/utils";
 
-function AmountField({
+export function AmountField({
   value,
   label,
   onCommit,
+  placeholder,
+  boxed,
 }: {
   value: number | null;
   label: string;
   onCommit: (next: number | null) => void;
+  placeholder?: string;
+  /** Show the field's border before it has focus, for inputs that start empty. */
+  boxed?: boolean;
 }) {
   const [text, setText] = useState(formatAmount(value));
   useEffect(() => setText(formatAmount(value)), [value]);
@@ -17,13 +22,17 @@ function AmountField({
     <input
       aria-label={label}
       inputMode="decimal"
+      placeholder={placeholder}
       value={text}
       onChange={(event) => setText(event.target.value)}
       onBlur={() => {
         const next = parseAmount(text);
         if (next !== value) onCommit(next);
       }}
-      className="w-full min-w-16 rounded-md border border-transparent bg-transparent px-1 py-1 text-right font-mono text-sm text-fg outline-none focus:border-border focus:bg-surface"
+      className={cn(
+        "w-full min-w-16 rounded-md border bg-transparent px-1 py-1 text-right font-mono text-sm text-fg outline-none placeholder:text-muted/60 focus:border-border focus:bg-surface",
+        boxed ? "border-border" : "border-transparent",
+      )}
     />
   );
 }

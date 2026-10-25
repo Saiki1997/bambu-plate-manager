@@ -4,6 +4,9 @@ import { normalizeHex } from "./color-distance.ts";
 import { rgbOf } from "./utils.ts";
 import { desktopApi } from "./desktop.ts";
 import { matchSourceLabel, matchStatusLabel } from "./manual-match.ts";
+import { emptyPrices, emptyStock, filamentTotals, summarizeTotals, type PriceBook, type StockBook } from "./filament-totals.ts";
+
+export type Costing = { prices: PriceBook; stock: StockBook };
 
 export type ExportReport = {
   plates: number;
@@ -150,13 +153,16 @@ function noteFor(row: FilamentRow): string {
   return notes.join("; ");
 }
 
-export async function buildWorkbook(project: Project): Promise<Blob> {
+export async function buildWorkbook(project: Project, costing: Costing = { prices: emptyPrices(), stock: emptyStock() }): Promise<Blob> {
   const { default: ExcelJS } = await import("exceljs");
   const book = new ExcelJS.Workbook();
   book.creator = "Bambu Plate Manager";
   book.created = new Date();
   const report = exportReport(project);
   const lines = includedLines(project);
+  const totals = filamentTotals(project, costing.prices, costing.stock);
+  const totalsSummary = summarizeTotals(totals);
+  const currency = costing.prices.currency;
 
   const summary = book.addWorksheet("Project Summary");
   const facts: Array<[string, string | number | null]> = [
@@ -170,6 +176,9 @@ export async function buildWorkbook(project: Project): Promise<Blob> {
     ["Lines needing OCR review", report.lowOcr],
     ["Uncertain colour matches", report.uncertainMatch],
     ["Missing colour", report.missingColour],
+    [currency ? `Estimated filament cost, ${currency}` : "Estimated filament cost", totalsSummary.cost],
+    ["Filaments without a price", totalsSummary.unpriced],
+    ["Filaments short on the spool", totalsSummary.short],
   ];
   summary.getCell("A1").value = "Bambu Plate Manager";
   summary.getCell("A1").font = { bold: true, size: 16, color: { argb: "FF1A1406" } };
@@ -181,7 +190,7 @@ export async function buildWorkbook(project: Project): Promise<Blob> {
     row.getCell(1).font = { bold: true };
     if (typeof fact[1] === "number") {
       row.getCell(2).value = fact[1];
-      if (fact[0].includes("grams")) row.getCell(2).numFmt = "0.00";
+      if (fact[0].includes("grams") || fact[0].includes("cost")) row.getCell(2).numFmt = "0.00";
     } else if (fact[1] === null) {
       row.getCell(2).value = "unavailable";
     } else {
@@ -284,6 +293,44 @@ export async function buildWorkbook(project: Project): Promise<Blob> {
   colourSheet.columns = [14, 16, 28, 18, 14, 16, 12, 16, 16].map((width) => ({ width }));
   paintHeader(colourSheet, 9);
 
+  const totalsSheet = book.addWorksheet("Filament Totals");
+  totalsSheet.addRow([
+    "Swatch",
+    "Brand",
+    "Filament",
+    "Material",
+    "Product code",
+    "Confirmed",
+    "Lines",
+    "Total grams",
+    "Total metres",
+    currency ? `Price per kg, ${currency}` : "Price per kg",
+    currency ? `Cost, ${currency}` : "Cost",
+    "On spool, grams",
+    "Short by, grams",
+  ]);
+  for (const total of totals) {
+    const excelRow = totalsSheet.addRow([
+      total.hex,
+      total.brand,
+      total.name,
+      total.material,
+      total.code,
+      total.confirmed ? "yes" : "no",
+      total.lines,
+    ]);
+    paintSwatch(excelRow.getCell(1), total.hex);
+    excelRow.getCell(5).numFmt = "@";
+    writeAmount(excelRow.getCell(8), total.grams);
+    writeAmount(excelRow.getCell(9), total.meters);
+    writeAmount(excelRow.getCell(10), total.perKg);
+    writeAmount(excelRow.getCell(11), total.cost);
+    writeAmount(excelRow.getCell(12), total.stock);
+    writeAmount(excelRow.getCell(13), total.shortBy);
+  }
+  totalsSheet.columns = [14, 14, 28, 18, 14, 11, 8, 13, 13, 14, 12, 15, 15].map((width) => ({ width }));
+  paintHeader(totalsSheet, 13);
+
   const plates = book.addWorksheet("Plates");
   plates.addRow(["Plate", "Prepare", "Print", "Total", "Status"]);
   for (const plate of project.plates) {
@@ -304,8 +351,8 @@ export async function buildWorkbook(project: Project): Promise<Blob> {
   });
 }
 
-export async function downloadWorkbook(project: Project) {
-  const blob = await buildWorkbook(project);
+export async function downloadWorkbook(project: Project, costing?: Costing) {
+  const blob = await buildWorkbook(project, costing);
   const safe = project.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "plates";
   const filename = `${safe}.xlsx`;
   const api = desktopApi();
