@@ -29,7 +29,8 @@ export function ColourField({
   useEffect(() => setText(row.hex ?? ""), [row.hex]);
   const actions = filamentActions(row);
   const swatch = shownHex(row);
-  const status = matchStatusLabel(row.matchStatus);
+  const status =
+    row.matchSource === "remembered" && row.matchStatus === "suggested" ? "Remembered from an earlier choice" : matchStatusLabel(row.matchStatus);
   const ocr = normalizeHex(row.ocrHex ?? row.hex);
   const selectedHex = normalizeHex(row.catalogueHex);
   return (

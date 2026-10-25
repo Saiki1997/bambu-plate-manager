@@ -210,6 +210,13 @@ function imageFile(id) {
   return bin;
 }
 
+const SETTING_NAMES = new Set(["colour-memory", "filament-prices", "spool-stock"]);
+
+function settingsFile(name) {
+  if (!SETTING_NAMES.has(name)) throw new Error("Unknown setting.");
+  return path.join(dataDir, "settings", `${name}.json`);
+}
+
 function createWindow() {
   const icon = app.isPackaged
     ? path.join(process.resourcesPath, "icon.png")
@@ -312,6 +319,19 @@ function registerIpc() {
   });
   ipcMain.handle("data:open", () => {
     if (dataDir) shell.openPath(dataDir);
+  });
+  ipcMain.handle("settings:read", (_event, name) => {
+    const file = settingsFile(name);
+    if (!fs.existsSync(file)) return null;
+    try {
+      return readJson(file);
+    } catch (error) {
+      log("error", `Could not read ${file}: ${error instanceof Error ? error.message : error}`);
+      return null;
+    }
+  });
+  ipcMain.handle("settings:write", (_event, name, value) => {
+    writeJsonAtomic(settingsFile(name), value);
   });
   ipcMain.handle("log:write", (_event, message) => {
     log("info", String(message).slice(0, 500));

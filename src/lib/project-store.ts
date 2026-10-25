@@ -56,7 +56,7 @@ export type FilamentRow = {
   matchConfidence: "high" | "medium" | "low" | null;
   matchLocked: boolean;
   matchStatus: "suggested" | "accepted" | "rejected" | "unverified" | "manual" | null;
-  matchSource?: "automatic" | "manual" | null;
+  matchSource?: "automatic" | "manual" | "remembered" | null;
   catalogueMissing?: boolean;
   catalogueChanged?: boolean;
   confidence: number;

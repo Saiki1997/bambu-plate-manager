@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent, type MouseEvent } from "react";
 import {
   AlertTriangle,
   ArrowDown,
@@ -22,7 +22,8 @@ import {
 import { cn } from "@/lib/utils";
 import { searchCatalogue, type CatalogueItem } from "@/lib/filament-match";
 import { ensureCatalogue } from "@/lib/filament-workbook";
-import { desktopApi, type DesktopInfo } from "@/lib/desktop";
+import { desktopApi, loadSetting, saveSetting, type DesktopInfo } from "@/lib/desktop";
+import { colourMemory, forgetPick, parseMemory, rememberPick, setColourMemory, subscribeColourMemory } from "@/lib/colour-memory";
 import { normalizeHex } from "@/lib/color-distance";
 import {
   automaticMatchPatch,
@@ -82,6 +83,7 @@ export function PlateApp() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [progress, setProgress] = useState<OcrProgress | null>(null);
+  const [batch, setBatch] = useState<{ index: number; count: number; name: string } | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [view, setView] = useState<"ledger" | "catalogue">("ledger");
   const [query, setQuery] = useState("");
@@ -99,6 +101,24 @@ export function PlateApp() {
   const cancelRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const scrollToRow = useRef<string | null>(null);
+
+  const memory = useSyncExternalStore(subscribeColourMemory, colourMemory);
+
+  useEffect(() => {
+    void loadSetting("colour-memory").then((value) => setColourMemory(parseMemory(value)));
+  }, []);
+
+  function updateMemory(next: ReturnType<typeof colourMemory>) {
+    if (next === colourMemory()) return;
+    setColourMemory(next);
+    void saveSetting("colour-memory", next).catch((error: unknown) => fail(error, "Remembered colours could not be saved."));
+  }
+
+  /** Remember the filament now chosen for this row, so the same swatch is suggested next time. */
+  function learn(rowId: string) {
+    const row = useProjectStore.getState().project.rows.find((entry) => entry.id === rowId);
+    if (row) updateMemory(rememberPick(colourMemory(), row));
+  }
 
   function setStatus(text: string | null) {
     setNotice(text ? { text, tone: "info" } : null);
@@ -275,45 +295,71 @@ export function PlateApp() {
   async function consume(files: File[]) {
     const images = files.filter((file) => file.type.startsWith("image/") || /\.(png|jpe?g|webp|bmp|tiff?)$/i.test(file.name));
     if (images.length === 0) {
-      setStatus("Choose a PNG or JPEG screenshot.");
+      fail(null, "Choose a PNG or JPEG screenshot.");
       return;
     }
     cancelRef.current = false;
     setBusy(true);
+    const read: string[] = [];
+    const duplicates: string[] = [];
+    const failed: string[] = [];
+    let lastMessage = "";
     try {
-      for (const file of images) {
+      for (const [index, file] of images.entries()) {
         if (cancelRef.current) break;
-        setProgress({ done: 0, total: 1, label: file.name });
-        const blob = file.slice(0, file.size, file.type || "image/png");
-        const hash = await hashBlob(blob);
-        const result = await readScreenshot(blob, setProgress, () => cancelRef.current);
-        if (cancelRef.current) break;
-        const message = ingest({
-          name: file.name,
-          hash,
-          width: result.width,
-          height: result.height,
-          parsed: result.parsed,
-          swatches: result.swatches,
-        });
-        const stored = useProjectStore.getState().project.images.find((image) => image.hash === hash);
-        if (stored && !message.startsWith("That screenshot")) {
-          await putImageBlob(stored.id, blob);
-          const api = desktopApi();
-          if (api) {
-            const bytes = new Uint8Array(await blob.arrayBuffer());
-            await api.saveImage({ id: stored.id, name: file.name, type: blob.type || "image/png", data: bytes });
+        setBatch({ index, count: images.length, name: file.name });
+        setProgress({ done: 0, total: 1, label: "Loading the reader" });
+        try {
+          const blob = file.slice(0, file.size, file.type || "image/png");
+          const hash = await hashBlob(blob);
+          if (useProjectStore.getState().project.images.some((image) => image.hash === hash)) {
+            duplicates.push(file.name);
+            continue;
           }
-          setSelectedId(stored.id);
+          const result = await readScreenshot(blob, setProgress, () => cancelRef.current);
+          if (cancelRef.current) break;
+          lastMessage = ingest({
+            name: file.name,
+            hash,
+            width: result.width,
+            height: result.height,
+            parsed: result.parsed,
+            swatches: result.swatches,
+          });
+          const stored = useProjectStore.getState().project.images.find((image) => image.hash === hash);
+          if (stored) {
+            await putImageBlob(stored.id, blob);
+            const api = desktopApi();
+            if (api) {
+              const bytes = new Uint8Array(await blob.arrayBuffer());
+              await api.saveImage({ id: stored.id, name: file.name, type: blob.type || "image/png", data: bytes });
+            }
+            setSelectedId(stored.id);
+          }
+          read.push(file.name);
+        } catch (error) {
+          failed.push(`${file.name} (${errorText(error, "could not be read")})`);
         }
-        setStatus(message);
       }
-    } catch (error) {
-      fail(error, "The screenshot could not be read.");
     } finally {
       setBusy(false);
       setProgress(null);
+      setBatch(null);
     }
+    const parts: string[] = [];
+    if (images.length === 1 && read.length === 1) parts.push(lastMessage);
+    else if (read.length > 0) parts.push(`Read ${read.length} of ${images.length} screenshots.`);
+    if (duplicates.length > 0) {
+      parts.push(
+        duplicates.length === 1
+          ? `${duplicates[0]} is already in this set.`
+          : `${duplicates.length} screenshots were already in this set.`,
+      );
+    }
+    if (cancelRef.current) parts.push("Import cancelled.");
+    if (failed.length > 0) parts.push(`Could not read ${failed.join(", ")}.`);
+    if (failed.length > 0) setNotice({ text: parts.join(" "), tone: "error" });
+    else setStatus(parts.join(" ") || null);
   }
 
   async function loadSamples() {
@@ -333,8 +379,11 @@ export function PlateApp() {
 
   function matchColours() {
     const { matched, skipped, unverified } = suggestAll();
+    const remembered = useProjectStore
+      .getState()
+      .project.rows.filter((row) => row.matchStatus === "suggested" && row.matchSource === "remembered").length;
     setStatus(
-      `Automatic matching suggested ${matched} colour${matched === 1 ? "" : "s"}. ${skipped} locked or manually confirmed match${skipped === 1 ? "" : "es"} left unchanged. ${unverified} unverified.`,
+      `Automatic matching suggested ${matched} colour${matched === 1 ? "" : "s"}${remembered ? `, ${remembered} from your earlier choices` : ""}. ${skipped} locked or manually confirmed match${skipped === 1 ? "" : "es"} left unchanged. ${unverified} unverified.`,
     );
     setView("ledger");
   }
@@ -362,6 +411,7 @@ export function PlateApp() {
     const row = useProjectStore.getState().project.rows.find((entry) => entry.id === rowId);
     if (!row) return;
     patchRow(rowId, manualSelectionPatch(row, item));
+    learn(rowId);
     setStatus(`Manually confirmed ${item.name} (${item.code || "no code"}). The OCR colour was kept.`);
     setView("ledger");
   }
@@ -821,6 +871,8 @@ export function PlateApp() {
           )}
           {view === "catalogue" ? (
             <CatalogueBrowser
+              memory={memory}
+              onForget={(hex) => updateMemory(forgetPick(colourMemory(), hex))}
               query={query}
               material={material}
               hits={catalogueHits}
@@ -994,7 +1046,15 @@ export function PlateApp() {
           {busy && progress && (
             <div className="rounded-md border border-border bg-surface p-3">
               <div className="flex items-center justify-between gap-3 text-sm">
-                <span>{progress.label}</span>
+                <span className="min-w-0">
+                  {batch && (
+                    <span className="block truncate font-medium">
+                      {batch.count > 1 ? `Screenshot ${batch.index + 1} of ${batch.count}: ` : ""}
+                      {batch.name}
+                    </span>
+                  )}
+                  <span className="block text-muted">{progress.label}</span>
+                </span>
                 <button type="button" onClick={() => (cancelRef.current = true)} className="min-h-11 text-sm text-primary">
                   Cancel
                 </button>
@@ -1114,14 +1174,15 @@ export function PlateApp() {
                             setStatus("Selection cleared. This line is unverified. The OCR colour was kept.");
                           }}
                           onRematch={() => rematchRow(row)}
-                          onAccept={() =>
+                          onAccept={() => {
                             patchRow(row.id, {
                               matchStatus: "accepted",
                               matchLocked: true,
-                              matchSource: "automatic",
+                              matchSource: row.matchSource === "remembered" ? "remembered" : "automatic",
                               needsReview: false,
-                            })
-                          }
+                            });
+                            learn(row.id);
+                          }}
                         />
                       </td>
                       <td className="px-2 py-2">
@@ -1197,6 +1258,7 @@ export function PlateApp() {
               return;
             }
             patchRow(row.id, manualSelectionPatch(row, item));
+            learn(row.id);
             setPickerRowId(null);
             setStatus(`Manually confirmed ${item.name} (${item.code || "no code"}). The OCR colour was kept.`);
           }}
