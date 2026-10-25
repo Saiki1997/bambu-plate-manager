@@ -7,6 +7,7 @@ export type DesktopImageMeta = {
 };
 
 export type DesktopInfo = {
+  version?: string;
   dataDir: string;
   preferredDir: string;
   askedUser: boolean;
@@ -25,9 +26,16 @@ export type DesktopApi = {
   saveExport: (name: string, data: Uint8Array) => Promise<string>;
   chooseDataDir: () => Promise<DesktopInfo>;
   openDataDir: () => Promise<void>;
+  listBackups: () => Promise<BackupEntry[]>;
+  restoreBackup: (name: string) => Promise<Project>;
+  checkForUpdate: () => Promise<UpdateInfo>;
+  openRelease: (url: string) => Promise<void>;
   readSetting: (name: SettingName) => Promise<unknown>;
   writeSetting: (name: SettingName, value: unknown) => Promise<void>;
 };
+
+export type BackupEntry = { name: string; savedAt: string; summary: string };
+export type UpdateInfo = { current: string; latest: string | null; newer: boolean; url: string };
 
 /** Files kept in the portable data folder's settings directory. */
 export type SettingName = "colour-memory" | "filament-prices" | "spool-stock";

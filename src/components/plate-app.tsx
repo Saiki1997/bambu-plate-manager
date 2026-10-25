@@ -40,6 +40,7 @@ import { CatalogueBrowser } from "./catalogue-browser";
 import { ExportDialog } from "./export-dialog";
 import { ShortcutsDialog, StepBar } from "./step-bar";
 import { TotalsView } from "./totals-view";
+import { DataBar } from "./data-bar";
 import {
   deductFromStock,
   emptyPrices,
@@ -143,6 +144,24 @@ export function PlateApp() {
   function learn(rowId: string) {
     const row = useProjectStore.getState().project.rows.find((entry) => entry.id === rowId);
     if (row) updateMemory(rememberPick(colourMemory(), row));
+  }
+
+  /** Copy a project's screenshots from the portable data folder into the browser image store. Returns how many were missing. */
+  async function pullImages(target: { images?: Array<{ id: string }> }): Promise<number> {
+    const api = desktopApi();
+    if (!api) return 0;
+    let missing = 0;
+    for (const image of target.images ?? []) {
+      const bytes = await api.readImage(image.id);
+      if (!bytes) {
+        missing += 1;
+        continue;
+      }
+      const copy = new Uint8Array(bytes.byteLength);
+      copy.set(bytes);
+      await putImageBlob(image.id, new Blob([copy], { type: "image/png" }));
+    }
+    return missing;
   }
 
   function setStatus(text: string | null) {
@@ -695,15 +714,22 @@ export function PlateApp() {
         </div>
       </header>
       <StepBar steps={steps} onStep={goToStep} />
-      {desktopInfo && (
-        <div className={desktopInfo.askedUser ? "border-b border-primary/50 bg-surface" : "border-b border-border"}>
-          <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-2 px-4 py-2 text-sm">
-            <p>{desktopInfo.askedUser ? desktopInfo.message : "Saved projects stay in the portable data folder next to this application."}</p>
-            <button type="button" onClick={() => void desktopApi()?.openDataDir()} className="min-h-11 text-sm text-primary">
-              Open data folder
-            </button>
-          </div>
-        </div>
+      {desktopInfo && desktopApi() && (
+        <DataBar
+          info={desktopInfo}
+          api={desktopApi()!}
+          onError={fail}
+          onRestore={async (restored, entry) => {
+            loadProject(restored);
+            const missing = await pullImages(restored);
+            setSelectedId(restored.images?.at(-1)?.id ?? null);
+            setActiveRowId(null);
+            setView("ledger");
+            setStatus(
+              `Restored the version saved ${new Date(entry.savedAt).toLocaleString()}.${missing ? ` ${missing} screenshot${missing === 1 ? " is" : "s are"} missing from the data folder.` : ""}`,
+            );
+          }}
+        />
       )}
 
       <div className="mx-auto grid max-w-6xl gap-4 px-4 py-4 lg:grid-cols-[17rem_minmax(0,1fr)]">

@@ -33,6 +33,19 @@ Replacing the exe with a newer copy does not delete `BambuPlateManagerData`. Do 
 
 The catalogue file shipped with the app is `attachments/Bambu_Lab_Filaments_Complete.xlsx`. The app copies it into the portable data folder on first launch and does not overwrite that copy later.
 
+## Using it
+
+1. **Import.** Drop, paste (Ctrl+V) or pick (Ctrl+O) one or more slicing screenshots.
+2. **Review.** The step bar at the top shows what is left. "Next to check" (or N) jumps to the next line that needs a look.
+3. **Match.** Confirm each colour from the filament database. A colour you choose or lock is remembered in `settings/colour-memory.json` and suggested, unlocked, the next time the same swatch colour appears. Remembered colours can be forgotten from the Filament database view.
+4. **Export.** Ctrl+E saves the Excel workbook into `exports/`.
+
+**Totals & cost** sums grams and metres per filament. Set a price per kg and the grams left on each spool to see the project cost and any filament that would run short. These are saved in `settings/` and the export includes a Filament Totals sheet. After printing, the project's grams can be subtracted from the spool stock.
+
+**Earlier versions** in the bar under the header lists the session backups in `backups/` and restores one; the current set is backed up first. **Check for updates** asks GitHub for the latest release and links to it. Nothing is checked unless you press it.
+
+Press ? for the keyboard shortcuts.
+
 Unverified colours stay unverified until you choose a row from that workbook. A manual choice is kept when automatic matching runs again, and the export labels it Manually Confirmed.
 
 ## Build
