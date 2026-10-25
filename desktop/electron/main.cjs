@@ -1,10 +1,12 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, net, shell } = require("electron");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { resolvePortableDataDir, safeId, inside } = require("./paths.cjs");
 
 const WORKBOOK = "Bambu_Lab_Filaments_Complete.xlsx";
+const RELEASES = "https://github.com/Saiki1997/bambu-plate-manager/releases";
+const LATEST_API = "https://api.github.com/repos/Saiki1997/bambu-plate-manager/releases/latest";
 
 let dataDir = null;
 let dataInfo = null;
@@ -203,11 +205,76 @@ function saveSession(project) {
   writeJsonAtomic(file, project);
 }
 
+function listBackups() {
+  const dir = path.join(dataDir, "backups");
+  if (!fs.existsSync(dir)) return [];
+  return fs
+    .readdirSync(dir)
+    .filter((name) => /^session-[\w-]+\.json$/.test(name))
+    .sort()
+    .reverse()
+    .map((name) => {
+      const file = path.join(dir, name);
+      const stat = fs.statSync(file);
+      let summary = "";
+      try {
+        const project = readJson(file);
+        const rows = Array.isArray(project?.rows) ? project.rows.filter((row) => !row.isTotal).length : 0;
+        summary = `${String(project?.name || "Untitled").slice(0, 80)} · ${rows} line${rows === 1 ? "" : "s"}`;
+      } catch {
+        summary = "Unreadable backup";
+      }
+      return { name, savedAt: stat.mtime.toISOString(), summary };
+    });
+}
+
+function restoreBackup(name) {
+  if (!/^session-[\w-]+\.json$/.test(String(name))) throw new Error("Unknown backup.");
+  const file = path.join(dataDir, "backups", name);
+  if (!inside(path.join(dataDir, "backups"), file) || !fs.existsSync(file)) throw new Error("That backup is no longer there.");
+  const project = readJson(file);
+  const { file: current } = sessionPaths();
+  if (fs.existsSync(current)) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    fs.copyFileSync(current, path.join(dataDir, "backups", `session-${stamp}-before-restore.json`));
+  }
+  writeJsonAtomic(current, project);
+  log("info", `Restored session from ${name}.`);
+  return project;
+}
+
+function newerVersion(latest, current) {
+  const parse = (value) => String(value).replace(/^v/i, "").split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const a = parse(latest);
+  const b = parse(current);
+  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+    if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+  }
+  return false;
+}
+
+async function checkForUpdate() {
+  const current = app.getVersion();
+  const response = await net.fetch(LATEST_API, { headers: { Accept: "application/vnd.github+json" } });
+  if (!response.ok) throw new Error(`GitHub answered ${response.status}. Try again later.`);
+  const release = await response.json();
+  const latest = String(release.tag_name || "").replace(/^v/i, "");
+  const url = typeof release.html_url === "string" && release.html_url.startsWith(RELEASES) ? release.html_url : RELEASES;
+  return { current, latest: latest || null, newer: latest ? newerVersion(latest, current) : false, url };
+}
+
 function imageFile(id) {
   if (!safeId(id)) throw new Error("Invalid image id.");
   const bin = path.join(dataDir, "images", id);
   if (!inside(path.join(dataDir, "images"), bin)) throw new Error("Invalid image path.");
   return bin;
+}
+
+const SETTING_NAMES = new Set(["colour-memory", "filament-prices", "spool-stock"]);
+
+function settingsFile(name) {
+  if (!SETTING_NAMES.has(name)) throw new Error("Unknown setting.");
+  return path.join(dataDir, "settings", `${name}.json`);
 }
 
 function createWindow() {
@@ -240,6 +307,7 @@ function createWindow() {
 
 function registerIpc() {
   ipcMain.handle("app:info", () => ({
+    version: app.getVersion(),
     dataDir,
     preferredDir: dataInfo?.preferredDir ?? dataDir,
     askedUser: Boolean(dataInfo?.askedUser),
@@ -312,6 +380,26 @@ function registerIpc() {
   });
   ipcMain.handle("data:open", () => {
     if (dataDir) shell.openPath(dataDir);
+  });
+  ipcMain.handle("backups:list", () => listBackups());
+  ipcMain.handle("backups:restore", (_event, name) => restoreBackup(name));
+  ipcMain.handle("update:check", () => checkForUpdate());
+  ipcMain.handle("update:open", (_event, url) => {
+    const target = String(url || "");
+    if (target.startsWith(RELEASES)) shell.openExternal(target);
+  });
+  ipcMain.handle("settings:read", (_event, name) => {
+    const file = settingsFile(name);
+    if (!fs.existsSync(file)) return null;
+    try {
+      return readJson(file);
+    } catch (error) {
+      log("error", `Could not read ${file}: ${error instanceof Error ? error.message : error}`);
+      return null;
+    }
+  });
+  ipcMain.handle("settings:write", (_event, name, value) => {
+    writeJsonAtomic(settingsFile(name), value);
   });
   ipcMain.handle("log:write", (_event, message) => {
     log("info", String(message).slice(0, 500));

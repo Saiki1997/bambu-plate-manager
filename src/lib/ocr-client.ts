@@ -1,5 +1,6 @@
 import { parseOcrDocument, type OcrLine, type ParsedDocument } from "@/lib/parse-slicing";
 import { previewPathPrefix } from "@/lib/preview-path-prefix";
+import { findSwatch } from "@/lib/swatch";
 
 const FULL = "0123456789.mMgGdhmsPlateTotal :";
 const DURATION = "0123456789dhms";
@@ -206,7 +207,7 @@ export async function readScreenshot(
   const swatches = parsed.rows.map((row) =>
     row.isTotal || row.y0 === null || row.y1 === null
       ? null
-      : sampleSwatch(frame.data, width, height, row.y0, row.y1),
+      : (sampleSwatch(frame.data, width, height, row.y0, row.y1) ?? findSwatch(frame.data, width, height, row.y0, row.y1)),
   );
   onProgress({ done: found.length, total: Math.max(found.length, 1), label: "Done" });
   return { parsed, width, height, swatches };

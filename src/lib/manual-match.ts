@@ -1,6 +1,7 @@
 import type { FilamentRow } from "./project-store.ts";
 import { normalizeHex } from "./color-distance.ts";
 import { catalogueItems, rankColours, type CatalogueItem, type ColourCandidate } from "./filament-match.ts";
+import { colourMemory, recallPick } from "./colour-memory.ts";
 
 /** Below this, a parsed line is not confident enough to verify a colour automatically. */
 export const OCR_CONFIDENCE_FLOOR = 0.75;
@@ -31,6 +32,7 @@ export function matchStatusLabel(status: MatchStatus | undefined): string {
 
 export function matchSourceLabel(source: FilamentRow["matchSource"], status: MatchStatus | undefined): string {
   if (source === "manual" || status === "manual") return "Manual selection";
+  if (source === "remembered") return "Remembered from an earlier choice";
   if (source === "automatic" || status === "suggested" || status === "accepted") return "Automatic suggestion";
   return "";
 }
@@ -106,6 +108,10 @@ export function suggestColour(row: FilamentRow): FilamentRow {
   if (row.isTotal || isProtectedMatch(row)) return row;
   if (catalogueItems().length === 0) return row;
   if (!row.hex) return blankCatalogue(row, null);
+  // A remembered choice comes from the swatch pixels, not the OCR text, so it is offered even on a
+  // line whose text is uncertain. It stays an unlocked suggestion and keeps the line's review flag.
+  const remembered = rememberedSuggestion(row);
+  if (remembered) return sameColourState(row, remembered) ? row : remembered;
   if (row.confidence < OCR_CONFIDENCE_FLOOR && !row.userCorrected) return blankCatalogue(row, null);
 
   const ranked = rankColours({ hex: row.hex, limit: 60 });
@@ -132,6 +138,32 @@ export function suggestColour(row: FilamentRow): FilamentRow {
     needsReview: row.needsReview,
   };
   return sameColourState(row, next) ? row : next;
+}
+
+/** A suggestion from a filament the user chose before for this swatch colour, if it is still in the database. */
+function rememberedSuggestion(row: FilamentRow): FilamentRow | null {
+  const pick = recallPick(colourMemory(), row.ocrHex ?? row.hex);
+  if (!pick) return null;
+  const lookup = lookupSavedCatalogue(pick);
+  if (lookup.status !== "found") return null;
+  const item = lookup.item;
+  return {
+    ...row,
+    ocrHex: row.ocrHex ?? row.hex,
+    catalogueId: item.family || null,
+    catalogueBrand: item.brand ?? null,
+    catalogueCode: item.code || null,
+    catalogueName: item.name,
+    catalogueMaterial: item.material,
+    catalogueHex: item.hexes[0] ?? null,
+    matchConfidence: "high",
+    matchStatus: "suggested",
+    matchSource: "remembered",
+    matchLocked: false,
+    catalogueMissing: false,
+    catalogueChanged: false,
+    needsReview: row.needsReview,
+  };
 }
 
 export function possibleCatalogueMatches(hex: string | null | undefined): CatalogueItem[] {

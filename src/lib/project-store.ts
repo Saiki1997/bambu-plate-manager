@@ -56,7 +56,7 @@ export type FilamentRow = {
   matchConfidence: "high" | "medium" | "low" | null;
   matchLocked: boolean;
   matchStatus: "suggested" | "accepted" | "rejected" | "unverified" | "manual" | null;
-  matchSource?: "automatic" | "manual" | null;
+  matchSource?: "automatic" | "manual" | "remembered" | null;
   catalogueMissing?: boolean;
   catalogueChanged?: boolean;
   confidence: number;
@@ -74,6 +74,8 @@ export type Project = {
   images: SourceImage[];
   plates: Plate[];
   rows: FilamentRow[];
+  /** When a workbook was last exported. Compared with updatedAt to tell whether it is stale. */
+  exportedAt?: string | null;
 };
 
 type State = {
@@ -99,6 +101,7 @@ type State = {
   reviewLocks: () => void;
   mergeDuplicates: () => number;
   loadProject: (project: Project) => void;
+  markExported: () => void;
 };
 
 function uid(): string {
@@ -506,7 +509,15 @@ export const useProjectStore = create<State>()(
         set(commit({ ...project, rows: merged.rows }, past));
         return merged.removed;
       },
-      loadProject: (next) => set({ project: { ...normalizeProject(next), updatedAt: new Date().toISOString() }, past: [] }),
+      loadProject: (next) => {
+        const now = new Date().toISOString();
+        const fresh = Boolean(next.exportedAt && next.exportedAt >= next.updatedAt);
+        set({ project: { ...normalizeProject(next), updatedAt: now, exportedAt: fresh ? now : (next.exportedAt ?? null) }, past: [] });
+      },
+      markExported: () => {
+        const project = get().project;
+        set({ project: { ...project, exportedAt: new Date().toISOString() } });
+      },
     }),
     {
       name: "plate-ledger",

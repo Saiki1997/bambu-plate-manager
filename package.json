@@ -1,10 +1,10 @@
 {
   "name": "bambu-plate-manager",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "scripts": {
-    "test": "node --experimental-strip-types --test src/lib/parse-slicing.test.ts src/lib/color-distance.test.ts src/lib/export-xlsx.test.ts src/lib/row-ops.test.ts src/lib/manual-match.test.ts src/lib/preview-path-prefix.test.ts"
+    "test": "node --experimental-strip-types --test src/lib/parse-slicing.test.ts src/lib/color-distance.test.ts src/lib/export-xlsx.test.ts src/lib/row-ops.test.ts src/lib/manual-match.test.ts src/lib/preview-path-prefix.test.ts src/lib/workflow.test.ts src/lib/colour-memory.test.ts src/lib/swatch.test.ts src/lib/filament-totals.test.ts"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.3.0",

@@ -12,5 +12,11 @@ contextBridge.exposeInMainWorld("bambuDesktop", {
   saveExport: (name, data) => ipcRenderer.invoke("export:save", { name, data }),
   chooseDataDir: () => ipcRenderer.invoke("data:choose"),
   openDataDir: () => ipcRenderer.invoke("data:open"),
+  listBackups: () => ipcRenderer.invoke("backups:list"),
+  restoreBackup: (name) => ipcRenderer.invoke("backups:restore", name),
+  checkForUpdate: () => ipcRenderer.invoke("update:check"),
+  openRelease: (url) => ipcRenderer.invoke("update:open", url),
+  readSetting: (name) => ipcRenderer.invoke("settings:read", name),
+  writeSetting: (name, value) => ipcRenderer.invoke("settings:write", name, value),
   log: (message) => ipcRenderer.invoke("log:write", message),
 });

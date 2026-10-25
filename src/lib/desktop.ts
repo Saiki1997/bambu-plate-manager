@@ -7,6 +7,7 @@ export type DesktopImageMeta = {
 };
 
 export type DesktopInfo = {
+  version?: string;
   dataDir: string;
   preferredDir: string;
   askedUser: boolean;
@@ -25,7 +26,41 @@ export type DesktopApi = {
   saveExport: (name: string, data: Uint8Array) => Promise<string>;
   chooseDataDir: () => Promise<DesktopInfo>;
   openDataDir: () => Promise<void>;
+  listBackups: () => Promise<BackupEntry[]>;
+  restoreBackup: (name: string) => Promise<Project>;
+  checkForUpdate: () => Promise<UpdateInfo>;
+  openRelease: (url: string) => Promise<void>;
+  readSetting: (name: SettingName) => Promise<unknown>;
+  writeSetting: (name: SettingName, value: unknown) => Promise<void>;
 };
+
+export type BackupEntry = { name: string; savedAt: string; summary: string };
+export type UpdateInfo = { current: string; latest: string | null; newer: boolean; url: string };
+
+/** Files kept in the portable data folder's settings directory. */
+export type SettingName = "colour-memory" | "filament-prices" | "spool-stock";
+
+/** Read a setting from the portable data folder, or from this browser outside the desktop app. */
+export async function loadSetting(name: SettingName): Promise<unknown> {
+  const api = desktopApi();
+  if (api) return api.readSetting(name);
+  try {
+    const raw = window.localStorage.getItem(`bambu-setting:${name}`);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveSetting(name: SettingName, value: unknown): Promise<void> {
+  const api = desktopApi();
+  if (api) return api.writeSetting(name, value);
+  try {
+    window.localStorage.setItem(`bambu-setting:${name}`, JSON.stringify(value));
+  } catch {
+    // Browser storage can be unavailable. The setting lasts until the page closes.
+  }
+}
 
 export function desktopApi(): DesktopApi | null {
   if (typeof window === "undefined") return null;
