@@ -6,7 +6,7 @@ The number beside a colour swatch is the **filament ID** in the Bambu Studio pro
 
 Download the finished portable build:
 
-[Bambu-Plate-Manager-Portable.exe](https://github.com/Saiki1997/bambu-plate-manager/releases/tag/v1.0.1)
+[Bambu-Plate-Manager-Portable.exe](https://github.com/Saiki1997/bambu-plate-manager/releases/tag/v1.1.0)
 
 ## Run from a folder or USB
 
